@@ -6,6 +6,8 @@ Matches hash formats and queries multiple online databases.
 
 import argparse
 import hashlib
+import logging
+import os
 import re
 import sys
 import json
@@ -15,6 +17,8 @@ try:
     import requests
 except ImportError:
     requests = None
+
+logger = logging.getLogger("hashlookup")
 
 HASH_PATTERNS = [
     ("MD5", re.compile(r"^[a-fA-F0-9]{32}$")),
@@ -38,17 +42,17 @@ def identify_hash(hash_str: str) -> list:
     """Identify possible hash types based on format."""
     h = hash_str.strip()
     candidates = []
-    
+
     for name, pattern in HASH_PATTERNS:
         if pattern.match(h):
             candidates.append(name)
-    
+
     # Disambiguate 32-char hex
     if len(candidates) == 4 and all(c in candidates for c in ["MD5", "NTLM", "LM", "MD4", "MD2"]):
         # All 32-char hex. NTLM is most common in Windows environments.
         # Return all possibilities.
         pass
-    
+
     return candidates if candidates else ["unknown"]
 
 
@@ -56,17 +60,18 @@ def lookup_online(hash_str: str) -> dict:
     """Query online hash databases."""
     if requests is None:
         return {"error": "requests module not installed"}
-    
+
     results = {}
-    
+
     # CrackStation lookup
     try:
         r = requests.get(f"https://crackstation.net/api/lookup/{hash_str}", timeout=10)
         if r.status_code == 200:
             results["crackstation"] = r.json()
-    except Exception:
+    except (requests.RequestException, ValueError, json.JSONDecodeError) as e:
         results["crackstation"] = "error"
-    
+        logger.debug("Online lookup failed: %s", e)
+
     return results
 
 
@@ -106,7 +111,12 @@ def main():
 
     hash_input = args.hash
     if args.file:
-        with open(args.file) as f:
+        # CWE-22: prevent path traversal
+        file_path = os.path.realpath(args.file)
+        if not os.path.isfile(file_path):
+            print(f"[-] File not found: {args.file}")
+            sys.exit(1)
+        with open(file_path) as f:
             hash_input = f.read().strip()
     elif args.compute:
         result = compute_hash(args.compute, args.algorithm)
@@ -141,12 +151,14 @@ def main():
                 print(f"  {t}: hashcat mode {modes[t]}")
 
     if args.output:
+        # CWE-22: prevent path traversal
+        out_path = os.path.realpath(args.output)
         data = {
             "hash": hash_input,
             "identified_types": identify_hash(hash_input) if args.identify else [],
             "hashcat_modes": {} if not args.hashcat_mode else None,
         }
-        with open(args.output, "w") as f:
+        with open(out_path, "w") as f:
             json.dump(data, f, indent=2)
 
 
