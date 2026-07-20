@@ -11,7 +11,6 @@ import os
 import re
 import sys
 import json
-from pathlib import Path
 
 try:
     import requests
